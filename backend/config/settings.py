@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "core",
     "accounts",
     "projects",
+    "corsheaders",
 ]
 
 AUTH_USER_MODEL = "accounts.User"
@@ -49,6 +50,7 @@ AUTH_USER_MODEL = "accounts.User"
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    "corsheaders.middleware.CorsMiddleware",
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -149,3 +151,8 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]

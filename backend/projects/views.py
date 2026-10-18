@@ -1,12 +1,14 @@
 from django.db import transaction
+from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions
 
-from .models import Project, ProjectMembership
+from .models import Issue, Project, ProjectMembership
 from .permissions import IsProjectOwner
-from .serializers import ProjectSerializer
-from .models import Issue
-from .serializers import IssueSerializer
-from django.shortcuts import get_object_or_404
+from .serializers import (
+    IssueSerializer,
+    ProjectMemberSerializer,
+    ProjectSerializer,
+)
 
 
 class ProjectListCreateView(generics.ListCreateAPIView):
@@ -21,26 +23,36 @@ class ProjectListCreateView(generics.ListCreateAPIView):
     @transaction.atomic
     def perform_create(self, serializer):
         project = serializer.save(owner=self.request.user)
-
-        ProjectMembership.objects.create(
+        ProjectMembership.objects.get_or_create(
             project=project,
             user=self.request.user,
-            role=ProjectMembership.Role.ADMIN,
+            defaults={"role": ProjectMembership.Role.ADMIN},
         )
 
 
 class ProjectDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ProjectSerializer
-    permission_classes = [
-        permissions.IsAuthenticated,
-        IsProjectOwner,
-    ]
+    permission_classes = [permissions.IsAuthenticated, IsProjectOwner]
 
     def get_queryset(self):
         return Project.objects.filter(
             memberships__user=self.request.user
         ).distinct()
 
+
+class ProjectMembersView(generics.ListAPIView):
+    serializer_class = ProjectMemberSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        project_id = self.kwargs["project_id"]
+        project = get_object_or_404(
+            Project.objects.filter(memberships__user=self.request.user).distinct(),
+            pk=project_id,
+        )
+        return ProjectMembership.objects.filter(
+            project=project
+        ).select_related("user").order_by("user__username")
 
 
 class IssueListCreateView(generics.ListCreateAPIView):
@@ -56,7 +68,6 @@ class IssueListCreateView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         serializer.save(reporter=self.request.user)
-
 
 
 class IssueDetailView(generics.RetrieveUpdateDestroyAPIView):
