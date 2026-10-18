@@ -214,3 +214,73 @@ class IssueTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_issue_can_be_assigned_only_to_project_member_and_filtered(self):
+        teammate = User.objects.create_user(
+            username="teammate", email="teammate@example.com", password="TestPass123!"
+        )
+        ProjectMembership.objects.create(project=self.project, user=teammate)
+        response = self.client.post(self.url, {
+            "project": self.project.id,
+            "title": "Assigned issue",
+            "assignee": teammate.id,
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["assignee"], teammate.id)
+        self.assertEqual(response.data["assignee_username"], teammate.username)
+
+        filtered = self.client.get(f"{self.url}?assignee={teammate.id}")
+        self.assertEqual(filtered.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(filtered.data), 1)
+        self.assertEqual(filtered.data[0]["id"], response.data["id"])
+
+        outsider = User.objects.create_user(
+            username="outsider", email="outsider@example.com", password="TestPass123!"
+        )
+        invalid = self.client.post(self.url, {
+            "project": self.project.id, "title": "Invalid", "assignee": outsider.id,
+        }, format="json")
+        self.assertEqual(invalid.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class ProjectMemberManagementTests(APITestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="owner", email="owner@example.com", password="TestPass123!"
+        )
+        self.project = Project.objects.create(name="Members", key="MEM", owner=self.owner)
+        ProjectMembership.objects.create(
+            project=self.project, user=self.owner, role=ProjectMembership.Role.ADMIN
+        )
+        self.client.force_authenticate(user=self.owner)
+        self.members_url = f"/api/v1/projects/{self.project.id}/members/"
+
+    def test_owner_can_add_list_and_remove_member(self):
+        user = User.objects.create_user(
+            username="new_member", email="new@example.com", password="TestPass123!"
+        )
+        response = self.client.post(self.members_url, {"user_id": user.id}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["username"], user.username)
+        self.assertEqual(response.data["role"], ProjectMembership.Role.MEMBER)
+        self.assertEqual(self.client.get(self.members_url).status_code, status.HTTP_200_OK)
+
+        issue = Issue.objects.create(project=self.project, title="Assigned", reporter=self.owner, assignee=user)
+        removed = self.client.delete(f"{self.members_url}{user.id}/")
+        self.assertEqual(removed.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(ProjectMembership.objects.filter(project=self.project, user=user).exists())
+        issue.refresh_from_db()
+        self.assertIsNone(issue.assignee)
+
+    def test_non_admin_cannot_manage_members_and_owner_cannot_be_removed(self):
+        member = User.objects.create_user(
+            username="member", email="member@example.com", password="TestPass123!"
+        )
+        ProjectMembership.objects.create(project=self.project, user=member)
+        self.client.force_authenticate(user=member)
+        forbidden = self.client.post(self.members_url, {"user_id": member.id}, format="json")
+        self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=self.owner)
+        protected = self.client.delete(f"{self.members_url}{self.owner.id}/")
+        self.assertEqual(protected.status_code, status.HTTP_400_BAD_REQUEST)

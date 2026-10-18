@@ -19,6 +19,7 @@ function App() {
   );
 
   const [projects, setProjects] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
   const [issues, setIssues] = useState([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [loadingIssues, setLoadingIssues] = useState(false);
@@ -32,6 +33,8 @@ function App() {
   const [assigneeFilter, setAssigneeFilter] = useState("ALL");
 
   const [membersByProject, setMembersByProject] = useState({});
+  const [availableMembers, setAvailableMembers] = useState([]);
+  const [memberUserId, setMemberUserId] = useState("");
   const [memberError, setMemberError] = useState("");
   const [loadingMembers, setLoadingMembers] = useState(false);
 
@@ -157,9 +160,61 @@ function App() {
     }
   }
 
+  async function openMemberManager(project) {
+    setEditingProject(project);
+    setMemberError("");
+    setFormError("");
+    setMemberUserId("");
+    setModal("members");
+    await Promise.all([
+      loadMembers(project.id),
+      apiRequest(`/projects/${project.id}/available-members/`)
+        .then((data) => setAvailableMembers(Array.isArray(data) ? data : data.results ?? []))
+        .catch((error) => setMemberError(error.message || "Could not load available users.")),
+    ]);
+  }
+
+  async function addProjectMember(event) {
+    event.preventDefault();
+    if (!memberUserId || !editingProject) return;
+    setMemberError("");
+    try {
+      await apiRequest(`/projects/${editingProject.id}/members/`, {
+        method: "POST",
+        body: JSON.stringify({ user_id: Number(memberUserId) }),
+      });
+      await loadMembers(editingProject.id);
+      const data = await apiRequest(`/projects/${editingProject.id}/available-members/`);
+      setAvailableMembers(Array.isArray(data) ? data : data.results ?? []);
+      setMemberUserId("");
+    } catch (error) {
+      setMemberError(error.message || "Could not add project member.");
+    }
+  }
+
+  async function removeProjectMember(member) {
+    if (!editingProject) return;
+    setMemberError("");
+    try {
+      await apiRequest(`/projects/${editingProject.id}/members/${member.user}/`, { method: "DELETE" });
+      setMembersByProject((current) => ({
+        ...current,
+        [editingProject.id]: (current[editingProject.id] || []).filter((item) => item.user !== member.user),
+      }));
+      setIssues((current) => current.map((issue) =>
+        Number(issue.project) === Number(editingProject.id) && Number(issue.assignee) === Number(member.user)
+          ? { ...issue, assignee: null, assignee_username: null, assignee_display_name: null }
+          : issue
+      ));
+    } catch (error) {
+      setMemberError(error.message || "Could not remove project member.");
+    }
+  }
+
   useEffect(() => {
     if (!isLoggedIn) return;
 
+    apiRequest("/auth/me/").then(setCurrentUser).catch(() => setCurrentUser(null));
     loadProjects();
     loadIssues();
   }, [isLoggedIn]);
@@ -581,6 +636,10 @@ function App() {
   }
 
   function renderProjectCard(project) {
+    const currentMembership = (membersByProject[project.id] || []).find(
+      (member) => Number(member.user) === Number(currentUser?.id)
+    );
+    const canManageMembers = project.owner === currentUser?.username || currentMembership?.role === "ADMIN";
     return (
       <article className="project-card" key={project.id}>
         <div className="project-symbol">
@@ -598,6 +657,15 @@ function App() {
         <span className="project-status">Active</span>
 
         <div className="item-actions">
+          {canManageMembers && (
+            <button
+              type="button"
+              className="small-action"
+              onClick={() => openMemberManager(project)}
+            >
+              Members ({(membersByProject[project.id] || []).length})
+            </button>
+          )}
           <button
             type="button"
             className="small-action"
@@ -1084,6 +1152,8 @@ function App() {
                     ? editingProject
                       ? "Edit project"
                       : "Create project"
+                    : modal === "members"
+                    ? `Members · ${editingProject?.name || "Project"}`
                     : editingIssue
                     ? "Edit issue"
                     : "Create issue"}
@@ -1103,7 +1173,35 @@ function App() {
               <p className="form-error">{formError}</p>
             )}
 
-            {modal === "project" ? (
+            {modal === "members" ? (
+              <div className="feature-form">
+                {memberError && <p className="form-error">{memberError}</p>}
+                <form className="member-add-form" onSubmit={addProjectMember}>
+                  <label>
+                    Add existing user
+                    <select value={memberUserId} onChange={(event) => setMemberUserId(event.target.value)}>
+                      <option value="">Select a user</option>
+                      {availableMembers.map((user) => (
+                        <option key={user.id} value={String(user.id)}>{user.display_name} (@{user.username})</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="primary-action" type="submit" disabled={!memberUserId}>Add member</button>
+                </form>
+                {loadingMembers ? <p className="subtitle">Loading members...</p> : (
+                  <div className="member-list">
+                    {(membersByProject[editingProject?.id] || []).map((member) => (
+                      <div className="member-row" key={member.user}>
+                        <span>{getMemberDisplayName(member)} <small>{member.role}</small></span>
+                        {member.username !== editingProject?.owner && (
+                          <button type="button" className="small-action danger-action" onClick={() => removeProjectMember(member)}>Remove</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : modal === "project" ? (
               <form
                 className="feature-form"
                 onSubmit={saveProject}
